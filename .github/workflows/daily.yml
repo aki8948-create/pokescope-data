@@ -1,0 +1,36 @@
+name: Daily tournament update
+on:
+  schedule:
+    - cron: '17 21 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['update.py', 'packs.json', 'catalog.json', 'rules.json', '.github/workflows/daily.yml']
+permissions:
+  contents: read
+concurrency:
+  group: tournament-data
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Fetch and validate current and previous pack data
+        run: python3 update.py
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: public
+          retention-days: 1
+      - name: Publish validated snapshot
+        id: deployment
+        uses: actions/deploy-pages@v4
