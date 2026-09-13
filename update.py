@@ -1,7 +1,7 @@
 """Daily public Pocket snapshot. Python standard library; no AI or paid services."""
-import json, time, re, html, unicodedata
+import json, time, re, html, unicodedata, gzip
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 BASE='https://play.limitlesstcg.com'
@@ -24,7 +24,7 @@ def get(url, as_json=True):
             if e.code not in (429,500,502,503,504) or attempt==4:raise
             retry=e.headers.get('Retry-After','')
             delay=float(retry) if retry.replace('.','',1).isdigit() else 2**(attempt+2)
-            if delay>180:raise RuntimeError('Rate limit too long; keep previous snapshot') from None
+            if delay>600:raise RuntimeError('Rate limit too long; keep previous snapshot') from None
             time.sleep(delay+1)
         except (URLError,TimeoutError):
             if attempt==4:raise
@@ -61,6 +61,13 @@ def build():
     if not start<boundary<=end:raise ValueError('Invalid pack date window')
     if config['minimum_players']!=30:raise ValueError('Minimum participants must remain 30')
     catalog=json.loads((ROOT/'catalog.json').read_text());known=json.loads((ROOT/'rules.json').read_text())
+    try:
+        previous=get('https://aki8948-create.github.io/pokescope-data/snapshot.json')
+        if previous.get('schemaVersion')!=1:raise ValueError('Invalid previous snapshot')
+        previous=previous['data']['events']
+    except (HTTPError,URLError,TimeoutError,ValueError):
+        previous=json.loads(gzip.decompress((ROOT/'initial-data.json.gz').read_bytes()))['events']
+    saved={e['id']:e for e in previous}
     selected={};complete=False
     for page in range(1,101):
         rows=get(BASE+f'/api/tournaments?game=POCKET&limit=50&page={page}')
@@ -76,6 +83,13 @@ def build():
     if not complete:raise ValueError('Listing incomplete; previous snapshot preserved')
     events=[];rules={}
     for i,identifier in enumerate(selected):
+        # Reuse historical results; refresh recent events for two days to catch final standings.
+        if identifier in saved and date(selected[identifier]['date'])<end-timedelta(days=2):
+            event=saved[identifier]
+            if start<=date(event['date'])<=end:
+                validate_cards(event['standings'],catalog)
+                events.append(event);rules[identifier]=rule(event,known)
+            continue
         prefix=BASE+'/api/tournaments/'+identifier
         details=get(prefix+'/details')
         if details.get('id')!=identifier:raise ValueError('Tournament ID mismatch')
